@@ -1,5 +1,4 @@
 import logging
-from keep_alive import keep_alive
 import asyncio
 import nest_asyncio
 from math import radians, cos, sin, asin, sqrt
@@ -195,7 +194,7 @@ async def run_bot():
     app.add_handler(conv_handler)
     app.add_handler(MessageHandler(
         filters.TEXT & filters.Regex("^❌ Ketish$"), ketish))
-    keep_alive()
+
 
     print("✅ Bot ishlamoqda...")
     await app.run_polling()
