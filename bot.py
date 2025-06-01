@@ -1,6 +1,8 @@
 import logging
 import asyncio
 import nest_asyncio
+import os
+import json
 from math import radians, cos, sin, asin, sqrt
 from datetime import datetime, timedelta
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -20,11 +22,11 @@ GEO_RADIUS_METERS = 100
 ASK_REASON = 1
 WHITELIST = ['5897615611']  # можно расширить
 
-# === Google Sheets ===
-scope = ['https://spreadsheets.google.com/feeds',
-         'https://www.googleapis.com/auth/drive']
-credentials = ServiceAccountCredentials.from_json_keyfile_name(
-    CREDENTIALS_FILE, scope)
+# === Google Sheets (через ENV) ===
+GOOGLE_CREDENTIALS = os.environ['GOOGLE_CREDENTIALS']
+credentials_dict = json.loads(GOOGLE_CREDENTIALS)
+scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
 gs = gspread.authorize(credentials)
 worksheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
 
@@ -32,8 +34,6 @@ worksheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
 logging.basicConfig(level=logging.INFO)
 
 # === Гео-проверка ===
-
-
 def is_in_office(user_lat, user_lon):
     def haversine(lat1, lon1, lat2, lon2):
         lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
@@ -45,12 +45,10 @@ def is_in_office(user_lat, user_lon):
     return haversine(user_lat, user_lon, OFFICE_LAT, OFFICE_LON) <= GEO_RADIUS_METERS
 
 # === Подсчёт опозданий ===
-
-
 def get_late_count(user_id):
     records = worksheet.get_all_records()
     df = pd.DataFrame(records)
-    df.columns = df.columns.str.strip()  # добавлено!
+    df.columns = df.columns.str.strip()
     if df.empty:
         return 0
     df['Sana'] = pd.to_datetime(df['Sana'], errors='coerce')
@@ -64,9 +62,8 @@ def get_late_count(user_id):
         (df['Oy'] == now_str)
     ]
     return len(filtered)
+
 # === Хендлеры ===
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if str(user.id) not in WHITELIST:
@@ -80,7 +77,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Ishga kelganligingizni tasdiqlash uchun 'Kelish' tugmasini bosing va joylashuvingizni yuboring:",
         reply_markup=markup
     )
-
 
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -116,7 +112,6 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Ofisda ekanligingiz tasdiqlandi. Xush kelibsiz!")
     return ConversationHandler.END
 
-
 async def reason_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sabab = update.message.text
     entry = context.user_data.get('entry', [])
@@ -125,7 +120,6 @@ async def reason_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         worksheet.append_row(entry)
         await update.message.reply_text("✅ Sabab qabul qilindi va ishga kelish qayd etildi.")
     return ConversationHandler.END
-
 
 async def ketish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -136,23 +130,16 @@ async def ketish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text("👋 Xayr! Ketish vaqtingiz qayd etildi.")
 
-# === Команда /tarix ===
-
-
 async def tarix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
-
     records = worksheet.get_all_records()
     if not records:
         await update.message.reply_text("🗂 Hech qanday yozuv topilmadi.")
         return
-
     df = pd.DataFrame(records)
     df.columns = df.columns.str.strip()
-
     df = df[df['Telegram ID'].astype(str) == str(user.id)]
-
     if args:
         try:
             target_date = args[0]
@@ -162,7 +149,6 @@ async def tarix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     else:
         df = df.sort_values(by='Sana', ascending=False).head(5)
-
     if df.empty:
         await update.message.reply_text("📭 Ko‘rsatilgan sanaga oid yozuvlar topilmadi.")
     else:
@@ -172,45 +158,34 @@ async def tarix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result += f"{row['Sana']} {row['Vaqt']} — {row['Holat']} ({row['Joy']}) — {sabab}\n"
         await update.message.reply_text(result)
 
-
 # === Запуск ===
-
-
 async def run_bot():
     app = ApplicationBuilder().token(
-        "7217397011:AAEBorIbswaTgb3qzk_vxvP4jnnpO6cvnM8").build()
+        os.environ['BOT_TOKEN']).build()
 
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.LOCATION, location_handler)],
-        states={ASK_REASON: [MessageHandler(
-            filters.TEXT & ~filters.COMMAND, reason_handler)]},
+        states={ASK_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, reason_handler)]},
         fallbacks=[]
     )
 
     app.add_handler(CommandHandler("start", start))
-    # Убедись, что есть функция tarix!
     app.add_handler(CommandHandler("tarix", tarix))
     app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex("^❌ Ketish$"), ketish))
-
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^❌ Ketish$"), ketish))
 
     print("✅ Bot ishlamoqda...")
     await app.run_polling()
 
-
 # === Запуск безопасно ===
-
-
 async def main():
     await run_bot()
 
-# Применяем nest_asyncio, чтобы разрешить повторный запуск цикла
 nest_asyncio.apply()
-
 try:
     loop = asyncio.get_event_loop()
     loop.create_task(main())
-    loop.run_forever()  # запускаем навсегда (без завершения)
+    loop.run_forever()
 except Exception as e:
     print("❌ Ошибка запуска:", e)
+
