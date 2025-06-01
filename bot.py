@@ -2,6 +2,7 @@ import logging
 import asyncio
 import nest_asyncio
 import os
+import json
 from math import radians, cos, sin, asin, sqrt
 from datetime import datetime, timedelta
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -15,15 +16,15 @@ import pandas as pd
 
 # === Настройки ===
 GOOGLE_SHEET_ID = '1YavT3ZyVdPu5SxuHTyjgqeDeyTSxShpaAMevz9f061M'
-CREDENTIALS_PATH = 'checkin-bot-461515-3abb45a5f32e.json'
 OFFICE_LAT = 41.0057953
 OFFICE_LON = 71.6804896
 GEO_RADIUS_METERS = 100
 ASK_REASON = 1
 
-# === Google Sheets (через файл) ===
+# === Google Sheets (через ENV с JSON) ===
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_PATH, scope)
+google_creds = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(google_creds, scope)
 gs = gspread.authorize(credentials)
 worksheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
 
