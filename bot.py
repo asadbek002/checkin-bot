@@ -14,7 +14,6 @@ import pandas as pd
 
 # === Настройки ===
 GOOGLE_SHEET_ID = '1YavT3ZyVdPu5SxuHTyjgqeDeyTSxShpaAMevz9f061M'
-CREDENTIALS_FILE = 'checkin-bot-461515-3abb45a5f32e.json'
 OFFICE_LAT = 41.0057953
 OFFICE_LON = 71.6804896
 GEO_RADIUS_METERS = 100
