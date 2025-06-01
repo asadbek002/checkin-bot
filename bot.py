@@ -3,6 +3,7 @@ import asyncio
 import nest_asyncio
 import os
 import json
+import base64
 from math import radians, cos, sin, asin, sqrt
 from datetime import datetime, timedelta
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -21,9 +22,11 @@ OFFICE_LON = 71.6804896
 GEO_RADIUS_METERS = 100
 ASK_REASON = 1
 
-# === Google Sheets (через ENV с JSON) ===
+# === Google Sheets (через base64 ENV) ===
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-google_creds = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+creds_b64 = os.environ['GOOGLE_CREDENTIALS_BASE64']
+creds_json = base64.b64decode(creds_b64).decode()
+google_creds = json.loads(creds_json)
 credentials = ServiceAccountCredentials.from_json_keyfile_dict(google_creds, scope)
 gs = gspread.authorize(credentials)
 worksheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
