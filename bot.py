@@ -2,7 +2,6 @@ import logging
 import asyncio
 import nest_asyncio
 import os
-import json
 from math import radians, cos, sin, asin, sqrt
 from datetime import datetime, timedelta
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -16,17 +15,16 @@ import pandas as pd
 
 # === Настройки ===
 GOOGLE_SHEET_ID = '1YavT3ZyVdPu5SxuHTyjgqeDeyTSxShpaAMevz9f061M'
+CREDENTIALS_PATH = 'checkin-bot-461515-3abb45a5f32e.json'  # путь к JSON-файлу
 OFFICE_LAT = 41.0057953
 OFFICE_LON = 71.6804896
 GEO_RADIUS_METERS = 100
 ASK_REASON = 1
-WHITELIST = ['5897615611']  # можно расширить
+WHITELIST = ['5897615611']
 
-# === Google Sheets (через ENV) ===
-GOOGLE_CREDENTIALS = os.environ['GOOGLE_CREDENTIALS']
-credentials_dict = json.loads(GOOGLE_CREDENTIALS)
+# === Google Sheets (через файл) ===
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_PATH, scope)
 gs = gspread.authorize(credentials)
 worksheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
 
@@ -39,7 +37,7 @@ def is_in_office(user_lat, user_lon):
         lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
         dlon = lon2 - lon1
         dlat = lat2 - lat1
-        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
         c = 2 * asin(sqrt(a))
         return 6371000 * c
     return haversine(user_lat, user_lon, OFFICE_LAT, OFFICE_LON) <= GEO_RADIUS_METERS
@@ -160,8 +158,7 @@ async def tarix(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Запуск ===
 async def run_bot():
-    app = ApplicationBuilder().token(
-        os.environ['BOT_TOKEN']).build()
+    app = ApplicationBuilder().token(os.environ['BOT_TOKEN']).build()
 
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.LOCATION, location_handler)],
@@ -177,7 +174,7 @@ async def run_bot():
     print("✅ Bot ishlamoqda...")
     await app.run_polling()
 
-# === Запуск безопасно ===
+# === Безопасный запуск ===
 async def main():
     await run_bot()
 
@@ -188,4 +185,3 @@ try:
     loop.run_forever()
 except Exception as e:
     print("❌ Ошибка запуска:", e)
-
