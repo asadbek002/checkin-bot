@@ -2,7 +2,6 @@ import logging
 import asyncio
 import nest_asyncio
 import os
-import json
 from math import radians, cos, sin, asin, sqrt
 from datetime import datetime, timedelta
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -16,16 +15,15 @@ import pandas as pd
 
 # === Настройки ===
 GOOGLE_SHEET_ID = '1YavT3ZyVdPu5SxuHTyjgqeDeyTSxShpaAMevz9f061M'
+CREDENTIALS_PATH = 'checkin-bot-461515-3abb45a5f32e.json'
 OFFICE_LAT = 41.0057953
 OFFICE_LON = 71.6804896
 GEO_RADIUS_METERS = 100
 ASK_REASON = 1
 
-# === Авторизация Google Sheets через ENV ===
-GOOGLE_CREDENTIALS = os.environ['GOOGLE_CREDENTIALS']
-credentials_dict = json.loads(GOOGLE_CREDENTIALS)
+# === Google Sheets (через файл) ===
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_PATH, scope)
 gs = gspread.authorize(credentials)
 worksheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
 
@@ -38,7 +36,7 @@ def is_in_office(user_lat, user_lon):
         lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
         dlon = lon2 - lon1
         dlat = lat2 - lat1
-        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
         c = 2 * asin(sqrt(a))
         return 6371000 * c
     return haversine(user_lat, user_lon, OFFICE_LAT, OFFICE_LON) <= GEO_RADIUS_METERS
@@ -83,25 +81,25 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_in_office(loc.latitude, loc.longitude):
         await update.message.reply_text("⚠️ Siz ofis yaqinida emassiz. Iltimos, ofis hududida belgilang.")
         return ConversationHandler.END
-    now = datetime.utcnow() + timedelta(hours=5)  # Наманган
-    is_late = now.hour > 9 or (now.hour == 9 and now.minute > 0)
+    now_kor = datetime.utcnow() + timedelta(hours=5)
+    is_late = now_kor.hour > 9 or (now_kor.hour == 9 and now_kor.minute > 0)
     if is_late:
         if get_late_count(user.id) >= 3:
             await update.message.reply_text("❌ Bu oyda 3 martadan ortiq kechikdingiz.")
-            worksheet.append_row([str(user.id), user.first_name, now.strftime("%Y-%m-%d"),
-                                  now.strftime("%H:%M"), "Kelgan", "Ofisda", "Sababsiz kech qoldi (blok)"])
+            worksheet.append_row([str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
+                                  now_kor.strftime("%H:%M"), "Kelgan", "Ofisda", "Sababsiz kech qoldi (blok)"])
             return ConversationHandler.END
         else:
-            context.user_data['entry'] = [str(user.id), user.first_name, now.strftime("%Y-%m-%d"),
-                                          now.strftime("%H:%M"), "Kelgan", "Ofisda"]
+            context.user_data['entry'] = [str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
+                                          now_kor.strftime("%H:%M"), "Kelgan", "Ofisda"]
             await context.bot.send_message(
-                chat_id=5897615611,  # админ
+                chat_id=5897615611,
                 text=f"⚠️ {user.first_name} ({user.id}) kechikdi. Sababini kutyapmiz."
             )
             await update.message.reply_text("⏰ Siz ishga kech qoldingiz. Iltimos, sababni yozing:")
             return ASK_REASON
-    worksheet.append_row([str(user.id), user.first_name, now.strftime("%Y-%m-%d"),
-                          now.strftime("%H:%M"), "Kelgan", "Ofisda", ""])
+    worksheet.append_row([str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
+                          now_kor.strftime("%H:%M"), "Kelgan", "Ofisda", ""])
     await update.message.reply_text("✅ Ofisda ekanligingiz tasdiqlandi. Xush kelibsiz!")
     return ConversationHandler.END
 
@@ -116,10 +114,10 @@ async def reason_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ketish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    now = datetime.utcnow() + timedelta(hours=5)
+    now_kor = datetime.utcnow() + timedelta(hours=5)
     worksheet.append_row([
-        str(user.id), user.first_name, now.strftime("%Y-%m-%d"),
-        now.strftime("%H:%M"), "Ketgan", "Noma'lum", ""
+        str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
+        now_kor.strftime("%H:%M"), "Ketgan", "Noma'lum", ""
     ])
     await update.message.reply_text("👋 Xayr! Ketish vaqtingiz qayd etildi.")
 
@@ -169,7 +167,7 @@ async def run_bot():
     print("✅ Bot ishlamoqda...")
     await app.run_polling()
 
-# === Запуск безопасно ===
+# === Безопасный запуск ===
 async def main():
     await run_bot()
 
