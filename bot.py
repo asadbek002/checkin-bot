@@ -2,8 +2,6 @@ import logging
 import asyncio
 import nest_asyncio
 import os
-import json
-import base64
 from math import radians, cos, sin, asin, sqrt
 from datetime import datetime, timedelta
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -11,25 +9,19 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
     filters, ConversationHandler
 )
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import pandas as pd
+from notion_client import Client
 
 # === Настройки ===
-GOOGLE_SHEET_ID = '1YavT3ZyVdPu5SxuHTyjgqeDeyTSxShpaAMevz9f061M'
+NOTION_TOKEN = os.environ['NOTION_TOKEN']
+DATABASE_ID = os.environ['NOTION_DATABASE']
+BOT_TOKEN = os.environ['BOT_TOKEN']
 OFFICE_LAT = 41.0057953
 OFFICE_LON = 71.6804896
 GEO_RADIUS_METERS = 100
 ASK_REASON = 1
+ADMIN_CHAT_ID = 5897615611  # при необходимости замени
 
-# === Google Sheets (через base64 ENV) ===
-scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-creds_b64 = os.environ['GOOGLE_CREDENTIALS_BASE64']
-creds_json = base64.b64decode(creds_b64).decode()
-google_creds = json.loads(creds_json)
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(google_creds, scope)
-gs = gspread.authorize(credentials)
-worksheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
+notion = Client(auth=NOTION_TOKEN)
 
 # === Логирование ===
 logging.basicConfig(level=logging.INFO)
@@ -45,24 +37,41 @@ def is_in_office(user_lat, user_lon):
         return 6371000 * c
     return haversine(user_lat, user_lon, OFFICE_LAT, OFFICE_LON) <= GEO_RADIUS_METERS
 
+# === Сохранение в Notion ===
+def save_to_notion(user_id, user_name, status, reason=""):
+    now = datetime.utcnow() + timedelta(hours=5)
+    notion.pages.create(
+        parent={"database_id": DATABASE_ID},
+        properties={
+            "Check-in": {"title": [{"text": {"content": f"{user_name} - {status}"}}]},
+            "Telegram ID": {"rich_text": [{"text": {"content": str(user_id)}}]},
+            "Ism": {"rich_text": [{"text": {"content": user_name}}]},
+            "Sana": {"date": {"start": now.strftime("%Y-%m-%d")}},
+            "Vaqt": {"rich_text": [{"text": {"content": now.strftime("%H:%M")}}]},
+            "Holat": {"select": {"name": status}},
+            "Joy": {"rich_text": [{"text": {"content": "Ofisda"}}]},
+            "Sabab": {"rich_text": [{"text": {"content": reason}}]}
+        }
+    )
+
 # === Подсчёт опозданий ===
 def get_late_count(user_id):
-    records = worksheet.get_all_records()
-    df = pd.DataFrame(records)
-    df.columns = df.columns.str.strip()
-    if df.empty:
-        return 0
-    df['Sana'] = pd.to_datetime(df['Sana'], errors='coerce')
-    df['Oy'] = df['Sana'].dt.strftime("%Y-%m")
-    now_str = (datetime.utcnow() + timedelta(hours=5)).strftime("%Y-%m")
-    filtered = df[
-        (df['Telegram ID'].astype(str) == str(user_id)) &
-        (df['Holat'] == 'Kelgan') &
-        (df['Sabab'].notnull()) &
-        (df['Sabab'] != '') &
-        (df['Oy'] == now_str)
-    ]
-    return len(filtered)
+    today = datetime.utcnow() + timedelta(hours=5)
+    month_str = today.strftime("%Y-%m")
+    results = notion.databases.query(
+        **{
+            "database_id": DATABASE_ID,
+            "filter": {
+                "and": [
+                    {"property": "Telegram ID", "rich_text": {"contains": str(user_id)}},
+                    {"property": "Holat", "select": {"equals": "Kelgan"}},
+                    {"property": "Sabab", "rich_text": {"is_not_empty": True}},
+                    {"property": "Sana", "date": {"on_or_after": f"{month_str}-01"}}
+                ]
+            }
+        }
+    )
+    return len(results.get("results", []))
 
 # === Хендлеры ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -85,77 +94,45 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_in_office(loc.latitude, loc.longitude):
         await update.message.reply_text("⚠️ Siz ofis yaqinida emassiz. Iltimos, ofis hududida belgilang.")
         return ConversationHandler.END
+
     now_kor = datetime.utcnow() + timedelta(hours=5)
     is_late = now_kor.hour > 9 or (now_kor.hour == 9 and now_kor.minute > 0)
+
     if is_late:
         if get_late_count(user.id) >= 3:
             await update.message.reply_text("❌ Bu oyda 3 martadan ortiq kechikdingiz.")
-            worksheet.append_row([str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
-                                  now_kor.strftime("%H:%M"), "Kelgan", "Ofisda", "Sababsiz kech qoldi (blok)"])
+            save_to_notion(user.id, user.first_name, "Kelgan", "Sababsiz kech qoldi (blok)")
             return ConversationHandler.END
         else:
-            context.user_data['entry'] = [str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
-                                          now_kor.strftime("%H:%M"), "Kelgan", "Ofisda"]
+            context.user_data['entry'] = (user.id, user.first_name, "Kelgan")
             await context.bot.send_message(
-                chat_id=5897615611,
+                chat_id=ADMIN_CHAT_ID,
                 text=f"⚠️ {user.first_name} ({user.id}) kechikdi. Sababini kutyapmiz."
             )
             await update.message.reply_text("⏰ Siz ishga kech qoldingiz. Iltimos, sababni yozing:")
             return ASK_REASON
-    worksheet.append_row([str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
-                          now_kor.strftime("%H:%M"), "Kelgan", "Ofisda", ""])
+
+    save_to_notion(user.id, user.first_name, "Kelgan")
     await update.message.reply_text("✅ Ofisda ekanligingiz tasdiqlandi. Xush kelibsiz!")
     return ConversationHandler.END
 
 async def reason_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sabab = update.message.text
-    entry = context.user_data.get('entry', [])
+    entry = context.user_data.get('entry')
     if entry:
-        entry.append(sabab)
-        worksheet.append_row(entry)
+        user_id, name, status = entry
+        save_to_notion(user_id, name, status, sabab)
         await update.message.reply_text("✅ Sabab qabul qilindi va ishga kelish qayd etildi.")
     return ConversationHandler.END
 
 async def ketish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    now_kor = datetime.utcnow() + timedelta(hours=5)
-    worksheet.append_row([
-        str(user.id), user.first_name, now_kor.strftime("%Y-%m-%d"),
-        now_kor.strftime("%H:%M"), "Ketgan", "Noma'lum", ""
-    ])
+    save_to_notion(user.id, user.first_name, "Ketgan")
     await update.message.reply_text("👋 Xayr! Ketish vaqtingiz qayd etildi.")
-
-async def tarix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    args = context.args
-    records = worksheet.get_all_records()
-    if not records:
-        await update.message.reply_text("🗂 Hech qanday yozuv topilmadi.")
-        return
-    df = pd.DataFrame(records)
-    df.columns = df.columns.str.strip()
-    df = df[df['Telegram ID'].astype(str) == str(user.id)]
-    if args:
-        try:
-            target_date = args[0]
-            df = df[df['Sana'] == target_date]
-        except:
-            await update.message.reply_text("⚠️ Sana noto‘g‘ri formatda. Masalan: /tarix 2025-06-01")
-            return
-    else:
-        df = df.sort_values(by='Sana', ascending=False).head(5)
-    if df.empty:
-        await update.message.reply_text("📭 Ko‘rsatilgan sanaga oid yozuvlar topilmadi.")
-    else:
-        result = ""
-        for _, row in df.iterrows():
-            sabab = row['Sabab'] if 'Sabab' in row and row['Sabab'] else "–"
-            result += f"{row['Sana']} {row['Vaqt']} — {row['Holat']} ({row['Joy']}) — {sabab}\n"
-        await update.message.reply_text(result)
 
 # === Запуск ===
 async def run_bot():
-    app = ApplicationBuilder().token(os.environ['BOT_TOKEN']).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.LOCATION, location_handler)],
@@ -164,7 +141,6 @@ async def run_bot():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("tarix", tarix))
     app.add_handler(conv_handler)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^❌ Ketish$"), ketish))
 
